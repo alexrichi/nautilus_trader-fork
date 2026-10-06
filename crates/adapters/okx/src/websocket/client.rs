@@ -1338,6 +1338,35 @@ impl OKXWebSocketClient {
         self.subscribe_instruments(inst_type).await
     }
 
+    /// Subscribes to ticker updates for the given instruments.
+    ///
+    /// OKX accepts multiple `tickers` args per message (the feed handler
+    /// chunks large requests into batches); the channel does not support
+    /// `instType`-only subscriptions.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the subscription request fails.
+    ///
+    /// # References
+    ///
+    /// <https://www.okx.com/docs-v5/en/#order-book-trading-market-data-ws-tickers-channel>.
+    pub async fn subscribe_tickers(
+        &self,
+        instrument_ids: &[InstrumentId],
+    ) -> Result<(), OKXWsError> {
+        let args = instrument_ids
+            .iter()
+            .map(|instrument_id| OKXSubscriptionArg {
+                channel: OKXWsChannel::Tickers,
+                inst_type: None,
+                inst_family: None,
+                inst_id: Some(instrument_id.symbol.inner()),
+            })
+            .collect();
+        self.subscribe(args).await
+    }
+
     /// Subscribes to order book data for an instrument.
     ///
     /// This is a convenience method that calls [`Self::subscribe_book_with_depth`] with depth 0,
@@ -1765,6 +1794,35 @@ impl OKXWebSocketClient {
             .await
     }
 
+    /// Subscribes to funding rate data for multiple instruments in one request.
+    ///
+    /// OKX counts subscription requests (480 per hour per connection), so
+    /// per-instrument messages do not scale across a whole venue; the channel
+    /// accepts an args array and confirms each instrument individually.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the subscription request fails.
+    ///
+    /// # References
+    ///
+    /// <https://www.okx.com/docs-v5/en/#public-data-websocket-funding-rate-channel>.
+    pub async fn subscribe_funding_rates_batch(
+        &self,
+        instrument_ids: &[InstrumentId],
+    ) -> Result<(), OKXWsError> {
+        let args = instrument_ids
+            .iter()
+            .map(|instrument_id| OKXSubscriptionArg {
+                channel: OKXWsChannel::FundingRate,
+                inst_type: None,
+                inst_family: None,
+                inst_id: Some(instrument_id.symbol.inner()),
+            })
+            .collect();
+        self.subscribe(args).await
+    }
+
     /// Subscribes to candlestick/bar data for an instrument.
     ///
     /// Supports various time intervals from 1s to 3M.
@@ -1800,6 +1858,27 @@ impl OKXWebSocketClient {
             inst_id: None,
         };
         self.unsubscribe(vec![arg]).await
+    }
+
+    /// Unsubscribes from ticker updates for the given instruments.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the unsubscription request fails.
+    pub async fn unsubscribe_tickers(
+        &self,
+        instrument_ids: &[InstrumentId],
+    ) -> Result<(), OKXWsError> {
+        let args = instrument_ids
+            .iter()
+            .map(|instrument_id| OKXSubscriptionArg {
+                channel: OKXWsChannel::Tickers,
+                inst_type: None,
+                inst_family: None,
+                inst_id: Some(instrument_id.symbol.inner()),
+            })
+            .collect();
+        self.unsubscribe(args).await
     }
 
     /// Unsubscribe from instrument updates for a specific instrument.

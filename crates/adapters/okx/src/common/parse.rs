@@ -662,9 +662,10 @@ pub fn parse_candlestick(
     let close = parse_price(&raw.4, price_precision)?;
     let volume = parse_quantity(&raw.5, size_precision)?;
 
-    Ok(Bar::new(
-        bar_type, open, high, low, close, volume, ts_event, ts_init,
-    ))
+    // OKX marks the in-progress candle with `confirm = "0"` (last tuple field).
+    let mut bar = Bar::new(bar_type, open, high, low, close, volume, ts_event, ts_init);
+    bar.closed = raw.8 == "1";
+    Ok(bar)
 }
 
 /// Parses an OKX order history record into a Nautilus [`OrderStatusReport`].

@@ -867,11 +867,12 @@ pub fn parse_candle_msg_vec(
     let mut bars = Vec::with_capacity(msgs.len());
 
     for msg in msgs {
-        // Only process completed candles to avoid duplicate/partial bars
-        if msg.confirm == OKXCandleConfirm::Closed {
-            let bar = parse_candle_msg(&msg, bar_type, price_precision, size_precision, ts_init)?;
-            bars.push(Data::Bar(bar));
-        }
+        // Unclosed candles are live revisions of the current bar: deliver them
+        // too, flagged `closed = false`, so consumers keep the current bar
+        // fresh (the cache overwrites in place by `ts_event`).
+        let mut bar = parse_candle_msg(&msg, bar_type, price_precision, size_precision, ts_init)?;
+        bar.closed = msg.confirm == OKXCandleConfirm::Closed;
+        bars.push(Data::Bar(bar));
     }
 
     Ok(bars)
