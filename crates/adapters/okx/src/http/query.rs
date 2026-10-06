@@ -712,6 +712,23 @@ pub struct GetPositionsHistoryParams {
     pub limit: Option<u32>,
 }
 
+/// Parameters for the GET /api/v5/account/leverage-info endpoint.
+#[derive(Clone, Debug, Deserialize, Serialize, Default, Builder)]
+#[builder(default)]
+#[builder(setter(into, strip_option))]
+#[serde(rename_all = "camelCase")]
+pub struct GetLeverageParams {
+    /// Instrument ID, e.g. "BTC-USDT-SWAP" (omit for all instruments).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inst_id: Option<String>,
+    /// Currency (for MARGIN instruments).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ccy: Option<String>,
+    /// Margin mode: cross | isolated.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mgn_mode: Option<String>,
+}
+
 /// Parameters for the GET /api/v5/trade/order endpoint (fetch order details).
 #[derive(Clone, Debug, Default, Deserialize, Serialize, Builder)]
 #[builder(default)]
