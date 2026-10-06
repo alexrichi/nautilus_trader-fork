@@ -1137,6 +1137,12 @@ pub struct Bar {
     pub ts_event: UnixNanos,
     /// UNIX timestamp (nanoseconds) when the instance was created.
     pub ts_init: UnixNanos,
+    /// Whether the bar is closed (final).
+    ///
+    /// Live feeds may publish the current bar as a revision: the same bar
+    /// arrives repeatedly with updated OHLCV and `closed = false` until the
+    /// venue confirms it. Closed bars are immutable.
+    pub closed: bool,
 }
 
 // Deserialization mirror routing through `new_checked` so serde inputs
@@ -1151,13 +1157,20 @@ struct BarFields {
     volume: Quantity,
     ts_event: UnixNanos,
     ts_init: UnixNanos,
+    /// Bars are closed by default; only live revisions carry `false`.
+    #[serde(default = "default_bar_closed")]
+    closed: bool,
+}
+
+fn default_bar_closed() -> bool {
+    true
 }
 
 impl TryFrom<BarFields> for Bar {
     type Error = anyhow::Error;
 
     fn try_from(fields: BarFields) -> Result<Self, Self::Error> {
-        Self::new_checked(
+        let mut bar = Self::new_checked(
             fields.bar_type,
             fields.open,
             fields.high,
@@ -1166,7 +1179,9 @@ impl TryFrom<BarFields> for Bar {
             fields.volume,
             fields.ts_event,
             fields.ts_init,
-        )
+        )?;
+        bar.closed = fields.closed;
+        Ok(bar)
     }
 }
 
@@ -1218,6 +1233,7 @@ impl Bar {
             volume,
             ts_event,
             ts_init,
+            closed: true,
         })
     }
 
@@ -2299,6 +2315,7 @@ mod tests {
             volume: Quantity::from("100000"),
             ts_event: UnixNanos::default(),
             ts_init: UnixNanos::from(1),
+            closed: true,
         };
 
         let bar2 = Bar {
@@ -2310,6 +2327,7 @@ mod tests {
             volume: Quantity::from("100000"),
             ts_event: UnixNanos::default(),
             ts_init: UnixNanos::from(1),
+            closed: true,
         };
         assert_eq!(bar1, bar1);
         assert_ne!(bar1, bar2);

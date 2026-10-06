@@ -78,6 +78,7 @@ impl Default for Bar {
             volume: Quantity::from(100_000),
             ts_event: UnixNanos::default(),
             ts_init: UnixNanos::default(),
+            closed: true,
         }
     }
 }
@@ -339,6 +340,7 @@ pub fn stub_bar() -> Bar {
         volume: Quantity::from("100000"),
         ts_event: UnixNanos::default(),
         ts_init: UnixNanos::from(1),
+        closed: true,
     }
 }
 

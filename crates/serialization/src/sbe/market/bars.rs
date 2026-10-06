@@ -94,6 +94,7 @@ impl MarketSbeMessage for Bar {
             volume,
             ts_event,
             ts_init,
+            closed: true,
         })
     }
 
