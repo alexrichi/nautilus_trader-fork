@@ -15,9 +15,12 @@
 
 //! Live market data client implementation for the OKX adapter.
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, AtomicU64, Ordering},
+use std::{
+    str::FromStr,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
 };
 
 use ahash::{AHashMap, AHashSet};
@@ -39,12 +42,13 @@ use nautilus_common::{
             OptionChainReferencePriceResponse, RequestBars, RequestBookSnapshot,
             RequestFundingRates, RequestInstrument, RequestInstruments,
             RequestOptionChainReferencePrice, RequestTrades, SubscribeBars, SubscribeBookDeltas,
-            SubscribeBookDepth, SubscribeFundingRates, SubscribeIndexPrices, SubscribeInstrument,
-            SubscribeInstrumentStatus, SubscribeInstruments, SubscribeMarkPrices,
-            SubscribeOptionGreeks, SubscribeQuotes, SubscribeTrades, TradesResponse,
-            UnsubscribeBars, UnsubscribeBookDeltas, UnsubscribeBookDepth, UnsubscribeFundingRates,
-            UnsubscribeIndexPrices, UnsubscribeInstrument, UnsubscribeInstrumentStatus,
-            UnsubscribeMarkPrices, UnsubscribeOptionGreeks, UnsubscribeQuotes, UnsubscribeTrades,
+            SubscribeBookDepth, SubscribeCustomData, SubscribeFundingRates, SubscribeIndexPrices,
+            SubscribeInstrument, SubscribeInstrumentStatus, SubscribeInstruments,
+            SubscribeMarkPrices, SubscribeOptionGreeks, SubscribeQuotes, SubscribeTrades,
+            TradesResponse, UnsubscribeBars, UnsubscribeBookDeltas, UnsubscribeBookDepth,
+            UnsubscribeCustomData, UnsubscribeFundingRates, UnsubscribeIndexPrices,
+            UnsubscribeInstrument, UnsubscribeInstrumentStatus, UnsubscribeMarkPrices,
+            UnsubscribeOptionGreeks, UnsubscribeQuotes, UnsubscribeTrades,
         },
     },
 };
@@ -60,7 +64,7 @@ use nautilus_live::{
     task::{TaskGroup, TaskGroupGuard, TaskSpawner},
 };
 use nautilus_model::{
-    data::{Data, FundingRateUpdate, InstrumentStatus},
+    data::{CustomData, Data, DataType, FundingRateUpdate, InstrumentStatus},
     enums::{BookType, GreeksConvention, MarketStatusAction},
     identifiers::{ClientId, InstrumentId, Venue},
     instruments::{Instrument, InstrumentAny},
@@ -91,6 +95,7 @@ use crate::{
         task::{spawn_task, terminate_tasks},
     },
     config::OKXDataClientConfig,
+    data_types::{OKXTicker, register_okx_custom_data},
     http::{
         client::{OKXHistoryCoverage, OKXHttpClient, OKXInstrumentDefinitionError},
         query::GetSpreadsParams,
@@ -100,7 +105,7 @@ use crate::{
         enums::OKXWsChannel,
         error::OKXWsError,
         handler::SnapshotGate,
-        messages::{NautilusWsMessage, OKXBookMsg, OKXOptionSummaryMsg, OKXWsMessage},
+        messages::{NautilusWsMessage, OKXBookMsg, OKXOptionSummaryMsg, OKXTickerMsg, OKXWsMessage},
         parse::{
             extract_fees_from_cached_instrument, parse_book_depth_msg, parse_book_msg_vec,
             parse_index_price_msg_vec, parse_option_summary_greeks, parse_rpi_book_msg_vec,
@@ -110,6 +115,10 @@ use crate::{
 };
 
 const BOOK_SNAPSHOT_DEPTH: usize = 5;
+
+/// Debounce window for batched public channel subscription requests
+/// (`tickers`, `funding-rate`).
+const SUBSCRIPTION_DEBOUNCE_MS: u64 = 250;
 
 #[derive(Debug)]
 pub struct OKXDataClient {
@@ -138,6 +147,19 @@ pub struct OKXDataClient {
     // refcount on failure. A bare `AHashMap` would leave the count
     // permanently incremented and wedge future Greeks subscribes.
     option_summary_family_subs: Arc<parking_lot::Mutex<AHashMap<Ustr, usize>>>,
+    // Custom `OKXTicker` subscriptions (refcount per instrument). The first
+    // subscriber arms the batched `tickers` channel subscription; the last one
+    // disarms it.
+    ticker_refs: Arc<AtomicMap<InstrumentId, usize>>,
+    // Pending batched `tickers` channel transitions: OKX has no instType form
+    // for this channel, and hundreds of per-instrument subscribe messages would
+    // burn the subscription rate limit, so requests are debounced into batches.
+    ticker_subs_pending: Arc<parking_lot::Mutex<Vec<InstrumentId>>>,
+    ticker_unsubs_pending: Arc<parking_lot::Mutex<Vec<InstrumentId>>>,
+    // Pending batched `funding-rate` channel subscriptions: same reason as the
+    // tickers channel — hundreds of per-instrument subscribe messages would
+    // burn the subscription rate limit, so requests are debounced into batches.
+    funding_subs_pending: Arc<parking_lot::Mutex<Vec<InstrumentId>>>,
     clock: &'static AtomicTime,
 }
 
@@ -275,12 +297,30 @@ impl OKXDataClient {
             index_ticker_map: Arc::new(AtomicMap::new()),
             option_greeks_subs: Arc::new(AtomicMap::new()),
             option_summary_family_subs: Arc::new(parking_lot::Mutex::new(AHashMap::new())),
+            ticker_refs: Arc::new(AtomicMap::new()),
+            ticker_subs_pending: Arc::new(parking_lot::Mutex::new(Vec::new())),
+            ticker_unsubs_pending: Arc::new(parking_lot::Mutex::new(Vec::new())),
+            funding_subs_pending: Arc::new(parking_lot::Mutex::new(Vec::new())),
             clock,
         })
     }
 
     fn venue(&self) -> Venue {
         *OKX_VENUE
+    }
+
+    /// Resolves the `instrument_id` metadata attached to a custom data subscription.
+    fn required_instrument_id_metadata(data_type: &DataType) -> anyhow::Result<InstrumentId> {
+        let raw = data_type
+            .metadata()
+            .as_ref()
+            .and_then(|metadata| metadata.get("instrument_id"))
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .context("custom data subscription requires `instrument_id` metadata")?;
+        InstrumentId::from_str(raw)
+            .with_context(|| format!("invalid instrument_id metadata `{raw}`"))
     }
 
     fn vip_level(&self) -> Option<OKXVipLevel> {
@@ -831,6 +871,51 @@ impl OKXDataClient {
                         }
                         Err(e) => {
                             log::error!("Failed to deserialize option summary data: {e}");
+                        }
+                    }
+                    return;
+                }
+
+                // The aggregated `tickers` channel is subscribed by instrument type,
+                // so every element carries its own inst_id which we resolve per-message.
+                // The channel is only armed while `OKXTicker` subscriptions exist
+                // (`subscribe_custom_data`), so every element is served here: an event for an
+                // unsubscribed instrument is dropped by the data engine on routing.
+                if matches!(channel, OKXWsChannel::Tickers) {
+                    let ts_init = clock.get_time_ns();
+
+                    match serde_json::from_value::<Vec<OKXTickerMsg>>(data) {
+                        Ok(msgs) => {
+                            let instruments_guard = instruments_by_symbol.load();
+
+                            for msg in &msgs {
+                                let Some(instrument) = instruments_guard.get(&msg.inst_id) else {
+                                    continue;
+                                };
+                                let instrument_id = instrument.id();
+
+                                match OKXTicker::from_msg(msg, instrument_id, ts_init) {
+                                    Ok(ticker) => {
+                                        let data_type = okx_ticker_data_type(instrument_id);
+                                        Self::send_data(
+                                            data_sender,
+                                            Data::Custom(CustomData::new(
+                                                Arc::new(ticker),
+                                                data_type,
+                                            )),
+                                        );
+                                    }
+                                    Err(e) => {
+                                        log::warn!(
+                                            "Failed to parse ticker for {}: {e}",
+                                            msg.inst_id
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            log::error!("Failed to deserialize ticker data: {e}");
                         }
                     }
                     return;
@@ -1827,6 +1912,22 @@ fn definition_in_scope(
     families.iter().any(|family| family.as_str() == family_key)
 }
 
+/// Builds the [`DataType`] for an [`OKXTicker`] custom data value.
+fn okx_ticker_data_type(instrument_id: InstrumentId) -> DataType {
+    let metadata = Params::new(
+        [(
+            "instrument_id".to_string(),
+            serde_json::Value::String(instrument_id.to_string()),
+        )]
+        .into(),
+    );
+    DataType::new(
+        "OKXTicker",
+        Some(metadata),
+        Some(instrument_id.to_string()),
+    )
+}
+
 fn configured_instrument_types(config: &OKXDataClientConfig) -> Vec<OKXInstrumentType> {
     if config.instrument_types.is_empty() {
         vec![OKXInstrumentType::Spot]
@@ -1987,6 +2088,8 @@ impl DataClient for OKXDataClient {
     }
 
     fn start(&mut self) -> anyhow::Result<()> {
+        register_okx_custom_data();
+
         log::info!(
             "Started: client_id={}, vip_level={:?}, instrument_types={:?}, environment={}, proxy_url={:?}",
             self.client_id,
@@ -2014,6 +2117,7 @@ impl DataClient for OKXDataClient {
         self.option_greeks_subs
             .store(AHashMap::<InstrumentId, AHashSet<OKXGreeksType>>::new());
         self.option_summary_family_subs.lock().clear();
+        self.ticker_refs.store(AHashMap::new());
         Ok(())
     }
 
@@ -2327,20 +2431,125 @@ impl DataClient for OKXDataClient {
         })
     }
 
-    fn subscribe_funding_rates(&mut self, cmd: SubscribeFundingRates) -> anyhow::Result<()> {
-        execute_instrument_subscriptions(&cmd.instrument_ids, |instrument_id| {
+    fn subscribe(&mut self, cmd: SubscribeCustomData) -> anyhow::Result<()> {
+        if cmd.data_type.type_name() != "OKXTicker" {
+            log::warn!(
+                "Unsupported custom data subscription: {}",
+                cmd.data_type.type_name()
+            );
+            return Ok(());
+        }
+
+        let instrument_id = Self::required_instrument_id_metadata(&cmd.data_type)?;
+        self.ticker_refs
+            .rcu(|refs| *refs.entry(instrument_id).or_insert(0) += 1);
+
+        // Debounce per-instrument subscription commands into batched requests.
+        let start_flusher = {
+            let mut pending = self.ticker_subs_pending.lock();
+            pending.push(instrument_id);
+            pending.len() == 1
+        };
+        if start_flusher {
             let ws = self.public_ws()?.clone();
+            let pending = Arc::clone(&self.ticker_subs_pending);
             self.spawn_ws(
                 async move {
-                    ws.subscribe_funding_rates(instrument_id)
-                        .await
-                        .context("funding rate subscription")
-                },
-                "funding rate subscription",
-            );
+                    time::sleep(Duration::from_millis(SUBSCRIPTION_DEBOUNCE_MS)).await;
+                    let mut batch = std::mem::take(&mut *pending.lock());
+                    batch.sort_unstable();
+                    batch.dedup();
 
-            Ok(())
-        })
+                    if !batch.is_empty() {
+                        ws.subscribe_tickers(&batch)
+                            .await
+                            .context("tickers subscription")?;
+                    }
+                    Ok(())
+                },
+                "tickers subscription",
+            );
+        }
+        Ok(())
+    }
+
+    fn unsubscribe(&mut self, cmd: &UnsubscribeCustomData) -> anyhow::Result<()> {
+        if cmd.data_type.type_name() != "OKXTicker" {
+            return Ok(());
+        }
+
+        let instrument_id = Self::required_instrument_id_metadata(&cmd.data_type)?;
+
+        self.ticker_refs.rcu(|refs| {
+            if let Some(count) = refs.get_mut(&instrument_id) {
+                *count = count.saturating_sub(1);
+                if *count == 0 {
+                    refs.remove(&instrument_id);
+                }
+            }
+        });
+
+        if self.ticker_refs.load().is_empty() {
+            // Nothing left to serve: debounce the batched unsubscribe.
+            let start_flusher = {
+                let mut pending = self.ticker_unsubs_pending.lock();
+                pending.push(instrument_id);
+                pending.len() == 1
+            };
+            if start_flusher {
+                let ws = self.public_ws()?.clone();
+                let pending = Arc::clone(&self.ticker_unsubs_pending);
+                self.spawn_ws(
+                    async move {
+                        time::sleep(Duration::from_millis(SUBSCRIPTION_DEBOUNCE_MS)).await;
+                        let mut batch = std::mem::take(&mut *pending.lock());
+                        batch.sort_unstable();
+                        batch.dedup();
+
+                        if !batch.is_empty() {
+                            ws.unsubscribe_tickers(&batch)
+                                .await
+                                .context("tickers unsubscription")?;
+                        }
+                        Ok(())
+                    },
+                    "tickers unsubscription",
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn subscribe_funding_rates(&mut self, cmd: SubscribeFundingRates) -> anyhow::Result<()> {
+        // Debounce subscription commands into batched requests: OKX accepts an args array,
+// so one message per flush instead of one per instrument.
+        let start_flusher = {
+            let mut pending = self.funding_subs_pending.lock();
+            let was_empty = pending.is_empty();
+            pending.extend(cmd.instrument_ids.iter().copied());
+            was_empty
+        };
+        if start_flusher {
+            let ws = self.public_ws()?.clone();
+            let pending = Arc::clone(&self.funding_subs_pending);
+            self.spawn_ws(
+                async move {
+                    time::sleep(Duration::from_millis(SUBSCRIPTION_DEBOUNCE_MS)).await;
+                    let mut batch = std::mem::take(&mut *pending.lock());
+                    batch.sort_unstable();
+                    batch.dedup();
+
+                    if !batch.is_empty() {
+                        ws.subscribe_funding_rates_batch(&batch)
+                            .await
+                            .context("funding rates subscription")?;
+                    }
+                    Ok(())
+                },
+                "funding rates subscription",
+            );
+        }
+        Ok(())
     }
 
     fn subscribe_option_greeks(&mut self, cmd: SubscribeOptionGreeks) -> anyhow::Result<()> {

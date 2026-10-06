@@ -21,6 +21,7 @@ crate-type = ["rlib"]
 
 [features]
 default = ["high-precision"]
+arrow = ["dep:arrow", "dep:nautilus-serialization", "nautilus-serialization/arrow"]
 extension-module = [
   "nautilus-common/extension-module",
   "nautilus-core/extension-module",
@@ -67,11 +68,13 @@ nautilus-core = { workspace = true }
 nautilus-live = { workspace = true }
 nautilus-model = { workspace = true }
 nautilus-network = { workspace = true, features = ["transport-sockudo"] }
+nautilus-serialization = { workspace = true, optional = true }
 nautilus-system = { workspace = true, optional = true }
 
 ahash = { workspace = true }
 anyhow = { workspace = true }
 arc-swap = { workspace = true }
+arrow = { workspace = true, optional = true }
 async-stream = { workspace = true }
 async-trait = { workspace = true }
 aws-lc-rs = { workspace = true }

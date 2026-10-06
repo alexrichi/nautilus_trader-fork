@@ -116,6 +116,7 @@
 pub mod common;
 pub mod config;
 pub mod data;
+pub mod data_types;
 pub mod execution;
 pub mod factories;
 pub mod http;
@@ -133,6 +134,7 @@ pub use crate::{
         models::OKXInstrument,
     },
     data::OKXDataClient,
+    data_types::OKXTicker,
     execution::OKXExecutionClient,
     http::{client::OKXHttpClient, error::OKXHttpError},
     websocket::{client::OKXWebSocketClient, error::OKXWsError},
