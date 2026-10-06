@@ -615,6 +615,8 @@ impl Bar {
             volume,
             ts_event: ts_event.into(),
             ts_init: ts_init.into(),
+            // The state tuple carries no flag: a restored bar is final
+            closed: true,
         };
 
         Ok(())

@@ -243,6 +243,7 @@ pub extern "C" fn bar_new(
         volume,
         ts_event,
         ts_init,
+        closed: true,
     }
 }
 

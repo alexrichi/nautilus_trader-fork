@@ -4114,11 +4114,23 @@ impl DataActorCore {
     }
 
     pub(crate) fn handle_indicators_for_bar(&self, bar: &Bar) -> anyhow::Result<()> {
+        // Bar revisions (unclosed bars) are not indicator inputs: indicator
+        // state is recursive and a revision would double-count the bar.
+        if !bar.closed {
+            return Ok(());
+        }
+
         self.indicators.handle_bar(bar)
     }
 
     pub(crate) fn handle_indicators_for_bars(&self, bars: &[Bar]) -> anyhow::Result<()> {
-        self.indicators.handle_bars(bars)
+        // Same as `handle_indicators_for_bar`: revisions are not inputs.
+        if bars.iter().all(|bar| bar.closed) {
+            return self.indicators.handle_bars(bars);
+        }
+
+        let closed: Vec<Bar> = bars.iter().filter(|bar| bar.closed).copied().collect();
+        self.indicators.handle_bars(&closed)
     }
 
     /// Returns the memory address of this instance as a hexadecimal string.

@@ -7365,6 +7365,7 @@ fn test_process_mark_bar_skipped_without_panic(instrument_eth_usdt: InstrumentAn
         volume: Quantity::from("100000.000"),
         ts_event: UnixNanos::from(1_000_000_000),
         ts_init: UnixNanos::from(1_000_000_000),
+        closed: true,
     };
 
     engine.process_bar(&mark_bar);
@@ -7395,6 +7396,7 @@ fn test_process_mark_bar_does_not_replace_selected_execution_bar(
         volume: Quantity::from("100000.000"),
         ts_event: UnixNanos::from(1_000_000_000),
         ts_init: UnixNanos::from(1_000_000_000),
+        closed: true,
     };
     let mark_bar = Bar {
         bar_type: BarType::from("ETHUSDT-PERP.BINANCE-1-MINUTE-MARK-EXTERNAL"),
@@ -7405,6 +7407,7 @@ fn test_process_mark_bar_does_not_replace_selected_execution_bar(
         volume: Quantity::from("100000.000"),
         ts_event: UnixNanos::from(2_000_000_000),
         ts_init: UnixNanos::from(2_000_000_000),
+        closed: true,
     };
     let second_hourly_bar = Bar {
         bar_type: hourly_bar_type,
@@ -7415,6 +7418,7 @@ fn test_process_mark_bar_does_not_replace_selected_execution_bar(
         volume: Quantity::from("100000.000"),
         ts_event: UnixNanos::from(3_000_000_000),
         ts_init: UnixNanos::from(3_000_000_000),
+        closed: true,
     };
 
     engine.process_bar(&first_hourly_bar);
@@ -7443,6 +7447,7 @@ fn test_process_monthly_bar_not_skipped(instrument_eth_usdt: InstrumentAny) {
         volume: Quantity::from("100000.000"),
         ts_event: UnixNanos::from(1_000_000_000),
         ts_init: UnixNanos::from(1_000_000_000),
+        closed: true,
     };
 
     // Process the monthly bar
@@ -7474,6 +7479,7 @@ fn test_process_yearly_bar_not_skipped(instrument_eth_usdt: InstrumentAny) {
         volume: Quantity::from("100000.000"),
         ts_event: UnixNanos::from(1_000_000_000),
         ts_init: UnixNanos::from(1_000_000_000),
+        closed: true,
     };
 
     // Process the yearly bar
@@ -7529,6 +7535,7 @@ fn test_process_trade_bar_fills_order_with_volume_not_divisible_by_four(
         volume: Quantity::from("0.05"),
         ts_event: UnixNanos::from(1_000_000_000),
         ts_init: UnixNanos::from(1_000_000_000),
+        closed: true,
     };
 
     engine.process_bar(&bar);
@@ -7590,6 +7597,7 @@ fn test_process_trade_bar_with_units_less_than_four_does_not_overfill(
         volume: Quantity::from("3"),
         ts_event: UnixNanos::from(1_000_000_000),
         ts_init: UnixNanos::from(1_000_000_000),
+        closed: true,
     };
 
     engine.process_bar(&bar);
@@ -7666,6 +7674,7 @@ fn test_process_trade_bar_with_two_units_fills_orders_at_high_and_low(
         volume: Quantity::from("2"),
         ts_event: UnixNanos::from(1_000_000_000),
         ts_init: UnixNanos::from(1_000_000_000),
+        closed: true,
     };
 
     engine.process_bar(&bar);
@@ -7730,6 +7739,7 @@ fn test_process_trade_bar_with_three_units_fills_order_at_high(
         volume: Quantity::from("3"),
         ts_event: UnixNanos::from(1_000_000_000),
         ts_init: UnixNanos::from(1_000_000_000),
+        closed: true,
     };
 
     engine.process_bar(&bar);
@@ -7770,6 +7780,7 @@ fn test_process_quote_bar_with_volume_not_divisible_by_four(instrument_eth_usdt:
         volume: Quantity::from("0.07"),
         ts_event: ts,
         ts_init: ts,
+        closed: true,
     };
     let ask_bar = Bar {
         bar_type: BarType::from("ETHUSDT-PERP.BINANCE-1-MINUTE-ASK-EXTERNAL"),
@@ -7780,6 +7791,7 @@ fn test_process_quote_bar_with_volume_not_divisible_by_four(instrument_eth_usdt:
         volume: Quantity::from("0.09"),
         ts_event: ts,
         ts_init: ts,
+        closed: true,
     };
 
     // The bug pattern: pre-fix, the synthesized bid/ask quote sizes had unaligned
@@ -7807,6 +7819,7 @@ fn test_process_quote_bar_with_one_unit_updates_close(instrument_eth_usdt: Instr
         volume: Quantity::from("1"),
         ts_event: ts,
         ts_init: ts,
+        closed: true,
     };
     let ask_bar = Bar {
         bar_type: BarType::from("ETHUSDT-PERP.BINANCE-1-MINUTE-ASK-EXTERNAL"),
@@ -7817,6 +7830,7 @@ fn test_process_quote_bar_with_one_unit_updates_close(instrument_eth_usdt: Instr
         volume: Quantity::from("1"),
         ts_event: ts,
         ts_init: ts,
+        closed: true,
     };
 
     engine.process_bar(&bid_bar);
@@ -7873,6 +7887,7 @@ fn test_process_quote_bar_with_asymmetric_units_updates_positive_sides(
         volume: Quantity::from("3"),
         ts_event: ts,
         ts_init: ts,
+        closed: true,
     };
     let ask_bar = Bar {
         bar_type: BarType::from("ETHUSDT-PERP.BINANCE-1-MINUTE-ASK-EXTERNAL"),
@@ -7883,6 +7898,7 @@ fn test_process_quote_bar_with_asymmetric_units_updates_positive_sides(
         volume: Quantity::from("1"),
         ts_event: ts,
         ts_init: ts,
+        closed: true,
     };
 
     engine.process_bar(&bid_bar);
@@ -7935,6 +7951,7 @@ fn test_process_quote_bar_with_zero_ask_volume_clears_previous_ask(
         volume: Quantity::from("1"),
         ts_event: first_ts,
         ts_init: first_ts,
+        closed: true,
     };
     let first_ask_bar = Bar {
         bar_type: BarType::from("ETHUSDT-PERP.BINANCE-1-MINUTE-ASK-EXTERNAL"),
@@ -7945,6 +7962,7 @@ fn test_process_quote_bar_with_zero_ask_volume_clears_previous_ask(
         volume: Quantity::from("1"),
         ts_event: first_ts,
         ts_init: first_ts,
+        closed: true,
     };
 
     engine.process_bar(&first_bid_bar);
@@ -7963,6 +7981,7 @@ fn test_process_quote_bar_with_zero_ask_volume_clears_previous_ask(
         volume: Quantity::from("3"),
         ts_event: second_ts,
         ts_init: second_ts,
+        closed: true,
     };
     let second_ask_bar = Bar {
         bar_type: BarType::from("ETHUSDT-PERP.BINANCE-1-MINUTE-ASK-EXTERNAL"),
@@ -7973,6 +7992,7 @@ fn test_process_quote_bar_with_zero_ask_volume_clears_previous_ask(
         volume: Quantity::from("0"),
         ts_event: second_ts,
         ts_init: second_ts,
+        closed: true,
     };
 
     engine.process_bar(&second_bid_bar);
@@ -8005,6 +8025,7 @@ fn test_process_quote_bar_with_zero_close_side_does_not_cross_book(
         volume: Quantity::from("8"),
         ts_event: ts,
         ts_init: ts,
+        closed: true,
     };
     let ask_bar = Bar {
         bar_type: BarType::from("ETHUSDT-PERP.BINANCE-1-MINUTE-ASK-EXTERNAL"),
@@ -8015,6 +8036,7 @@ fn test_process_quote_bar_with_zero_close_side_does_not_cross_book(
         volume: Quantity::from("3"),
         ts_event: ts,
         ts_init: ts,
+        closed: true,
     };
 
     engine.process_bar(&bid_bar);
@@ -8073,6 +8095,7 @@ fn test_process_quote_bar_with_two_units_fills_orders_at_high_and_low(
         volume: Quantity::from("2"),
         ts_event: ts,
         ts_init: ts,
+        closed: true,
     };
     let ask_bar = Bar {
         bar_type: BarType::from("ETHUSDT-PERP.BINANCE-1-MINUTE-ASK-EXTERNAL"),
@@ -8083,6 +8106,7 @@ fn test_process_quote_bar_with_two_units_fills_orders_at_high_and_low(
         volume: Quantity::from("2"),
         ts_event: ts,
         ts_init: ts,
+        closed: true,
     };
 
     engine.process_bar(&bid_bar);
@@ -9278,6 +9302,7 @@ fn test_market_if_touched_buy_fills_at_trigger_price(
         volume: Quantity::from("100.000"),
         ts_event: UnixNanos::from(1_000_000_000),
         ts_init: UnixNanos::from(1_000_000_000),
+        closed: true,
     };
     engine.process_bar(&init_bar);
     clear_order_event_handler_messages(&order_event_handler);
@@ -9305,6 +9330,7 @@ fn test_market_if_touched_buy_fills_at_trigger_price(
         volume: Quantity::from("100.000"),
         ts_event: UnixNanos::from(2_000_000_000),
         ts_init: UnixNanos::from(2_000_000_000),
+        closed: true,
     };
 
     // Simulate bar H/L/C processing (handler not yet wired)
@@ -9352,6 +9378,7 @@ fn test_market_if_touched_sell_fills_at_trigger_price(
         volume: Quantity::from("100.000"),
         ts_event: UnixNanos::from(1_000_000_000),
         ts_init: UnixNanos::from(1_000_000_000),
+        closed: true,
     };
     engine.process_bar(&init_bar);
     clear_order_event_handler_messages(&order_event_handler);
@@ -9379,6 +9406,7 @@ fn test_market_if_touched_sell_fills_at_trigger_price(
         volume: Quantity::from("100.000"),
         ts_event: UnixNanos::from(2_000_000_000),
         ts_init: UnixNanos::from(2_000_000_000),
+        closed: true,
     };
 
     // Simulate bar H/L/C processing (handler not yet wired)
@@ -9428,6 +9456,7 @@ fn test_market_if_touched_buy_fills_at_trigger_price_with_liquidity_consumption(
         volume: Quantity::from("100.000"),
         ts_event: UnixNanos::from(1_000_000_000),
         ts_init: UnixNanos::from(1_000_000_000),
+        closed: true,
     };
     engine.process_bar(&init_bar);
     clear_order_event_handler_messages(&order_event_handler);
@@ -9492,6 +9521,7 @@ fn test_market_if_touched_sell_fills_at_trigger_price_with_liquidity_consumption
         volume: Quantity::from("100.000"),
         ts_event: UnixNanos::from(1_000_000_000),
         ts_init: UnixNanos::from(1_000_000_000),
+        closed: true,
     };
     engine.process_bar(&init_bar);
     clear_order_event_handler_messages(&order_event_handler);
@@ -10647,6 +10677,7 @@ fn test_bar_execution_fills_stop_order(
         volume: Quantity::from("100.000"),
         ts_event: UnixNanos::from(2u64),
         ts_init: UnixNanos::from(2u64),
+        closed: true,
     };
     engine.process_bar(&bar);
 
@@ -10688,6 +10719,7 @@ fn test_bar_execution_triggers_last_price_stop_on_its_leg(
         volume: Quantity::from("100.000"),
         ts_event: UnixNanos::from(1u64),
         ts_init: UnixNanos::from(1u64),
+        closed: true,
     };
 
     engine.process_bar(&flat_bar);
@@ -10715,6 +10747,7 @@ fn test_bar_execution_triggers_last_price_stop_on_its_leg(
         volume: Quantity::from("100.000"),
         ts_event: UnixNanos::from(2u64),
         ts_init: UnixNanos::from(2u64),
+        closed: true,
     };
 
     engine.process_bar(&falling_bar);
@@ -10796,6 +10829,7 @@ fn test_bar_adaptive_ordering_fills_low_side_first(
         volume: Quantity::from("100.000"),
         ts_event: UnixNanos::from(2u64),
         ts_init: UnixNanos::from(2u64),
+        closed: true,
     };
     engine.process_bar(&bar);
 
@@ -10879,6 +10913,7 @@ fn test_quote_bar_adaptive_ordering_fills_low_side_first(
         volume: Quantity::from("100.000"),
         ts_event: UnixNanos::from(2u64),
         ts_init: UnixNanos::from(2u64),
+        closed: true,
     };
     let ask_bar = Bar {
         bar_type: BarType::from("ETHUSDT-PERP.BINANCE-1-MINUTE-ASK-EXTERNAL"),
@@ -10889,6 +10924,7 @@ fn test_quote_bar_adaptive_ordering_fills_low_side_first(
         volume: Quantity::from("100.000"),
         ts_event: UnixNanos::from(2u64),
         ts_init: UnixNanos::from(2u64),
+        closed: true,
     };
     engine.process_bar(&bid_bar);
     engine.process_bar(&ask_bar);
@@ -10934,6 +10970,7 @@ fn test_reset_clears_cached_quote_bars(
         volume: Quantity::from("100.000"),
         ts_event: UnixNanos::from(2u64),
         ts_init: UnixNanos::from(2u64),
+        closed: true,
     };
     engine.process_bar(&bid_bar);
     engine.reset();
@@ -10949,6 +10986,7 @@ fn test_reset_clears_cached_quote_bars(
         volume: Quantity::from("100.000"),
         ts_event: UnixNanos::from(2u64),
         ts_init: UnixNanos::from(2u64),
+        closed: true,
     };
     engine.process_bar(&ask_bar);
 
@@ -15879,6 +15917,7 @@ fn test_process_bar_drops_precision_mismatch_after_instrument_update(
         volume: Quantity::from("100.000"),
         ts_event: UnixNanos::from(1),
         ts_init: UnixNanos::from(1),
+        closed: true,
     };
 
     engine.process_bar(&stale_bar);
