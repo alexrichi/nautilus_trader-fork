@@ -91,18 +91,18 @@ use super::{
         OKXCancelAlgoOrderResponse, OKXCancelAllSpreadOrdersRequest, OKXCancelOrderRequest,
         OKXCancelOrderResponse, OKXCancelSpreadOrderRequest, OKXEventContractEvent,
         OKXEventContractMarket, OKXEventContractSeries, OKXFeeRate, OKXFundingRateHistory,
-        OKXIndexTicker, OKXMarkPrice, OKXOptionSummary, OKXOrderAlgo, OKXOrderBookSnapshot,
-        OKXOrderHistory, OKXPlaceAlgoOrderRequest, OKXPlaceAlgoOrderResponse, OKXPlaceOrderRequest,
-        OKXPlaceOrderResponse, OKXPlaceSpreadOrderRequest, OKXPosition, OKXPositionHistory,
-        OKXPositionTier, OKXPriceLimit, OKXRpiOrderBookSnapshot, OKXServerTime, OKXSpread,
-        OKXSpreadOrder, OKXSpreadTrade, OKXTransactionDetail,
+        OKXIndexTicker, OKXLeverageInfo, OKXMarkPrice, OKXOptionSummary, OKXOrderAlgo,
+        OKXOrderBookSnapshot, OKXOrderHistory, OKXPlaceAlgoOrderRequest, OKXPlaceAlgoOrderResponse,
+        OKXPlaceOrderRequest, OKXPlaceOrderResponse, OKXPlaceSpreadOrderRequest, OKXPosition,
+        OKXPositionHistory, OKXPositionTier, OKXPriceLimit, OKXRpiOrderBookSnapshot, OKXServerTime,
+        OKXSetLeverageRequest, OKXSpread, OKXSpreadOrder, OKXSpreadTrade, OKXTransactionDetail,
     },
     query::{
         ActivateFeatureParams, GetAlgoOrderParams, GetAlgoOrderParamsBuilder, GetAlgoOrdersParams,
         GetAlgoOrdersParamsBuilder, GetCandlesticksParams, GetCandlesticksParamsBuilder,
         GetEventContractEventsParams, GetEventContractMarketsParams, GetEventContractSeriesParams,
         GetFundingRateHistoryParams, GetIndexTickerParams, GetIndexTickerParamsBuilder,
-        GetInstrumentsParams, GetInstrumentsParamsBuilder, GetMarkPriceParams,
+        GetInstrumentsParams, GetInstrumentsParamsBuilder, GetLeverageParams, GetMarkPriceParams,
         GetMarkPriceParamsBuilder, GetOptionSummaryParams, GetOrderBookParams,
         GetOrderHistoryParams, GetOrderHistoryParamsBuilder, GetOrderListParams,
         GetOrderListParamsBuilder, GetOrderParams, GetOrderParamsBuilder, GetPositionTiersParams,
@@ -2105,6 +2105,55 @@ impl OKXRawHttpClient {
         )
         .await
     }
+
+    /// Requests the leverage for an instrument (or all instruments under the given margin mode).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the operation fails.
+    ///
+    /// # References
+    ///
+    /// <https://www.okx.com/docs-v5/en/#trading-account-rest-api-get-leverage>
+    pub async fn get_leverage(
+        &self,
+        params: GetLeverageParams,
+    ) -> Result<Vec<OKXLeverageInfo>, OKXHttpError> {
+        self.send_request(
+            Method::GET,
+            "/api/v5/account/leverage-info",
+            Some(&params),
+            None,
+            true,
+        )
+        .await
+    }
+
+    /// Sets leverage for an instrument (or currency).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request cannot be serialized or the operation fails.
+    ///
+    /// # References
+    ///
+    /// <https://www.okx.com/docs-v5/en/#trading-account-rest-api-set-leverage>
+    pub async fn set_leverage(
+        &self,
+        request: &OKXSetLeverageRequest,
+    ) -> Result<Vec<OKXLeverageInfo>, OKXHttpError> {
+        let body = serde_json::to_vec(request).map_err(|e| {
+            OKXHttpError::RequestSerialization(format!("Failed to serialize set-leverage: {e}"))
+        })?;
+        self.send_request::<_, ()>(
+            Method::POST,
+            "/api/v5/account/set-leverage",
+            None,
+            Some(body),
+            true,
+        )
+        .await
+    }
 }
 
 /// Provides a higher-level HTTP client for the [OKX](https://okx.com) REST API.
@@ -2326,6 +2375,30 @@ impl OKXHttpClient {
         self.inner.get_positions(params).await
     }
 
+    /// Requests the leverage for an instrument (or all instruments under the given margin mode).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the operation fails.
+    pub async fn get_leverage(
+        &self,
+        params: GetLeverageParams,
+    ) -> Result<Vec<OKXLeverageInfo>, OKXHttpError> {
+        self.inner.get_leverage(params).await
+    }
+
+    /// Sets leverage for an instrument (or currency).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the operation fails.
+    pub async fn set_leverage(
+        &self,
+        request: &OKXSetLeverageRequest,
+    ) -> Result<Vec<OKXLeverageInfo>, OKXHttpError> {
+        self.inner.set_leverage(request).await
+    }
+
     /// Returns the base url being used by the client.
     pub fn base_url(&self) -> &str {
         self.inner.base_url.as_str()
@@ -2405,6 +2478,20 @@ impl OKXHttpClient {
     /// Gets an instrument from the cache by symbol.
     pub fn get_instrument(&self, symbol: &Ustr) -> Option<InstrumentAny> {
         self.instruments_cache.get_cloned(symbol)
+    }
+
+    /// Requests the raw public instrument definitions (per type, family or id).
+    ///
+    /// The raw model keeps the per-instrument maximum leverage in `lever`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP request fails or the response cannot be deserialized.
+    pub async fn get_instruments(
+        &self,
+        params: GetInstrumentsParams,
+    ) -> Result<Vec<OKXInstrument>, OKXHttpError> {
+        self.inner.get_instruments(params).await
     }
 
     /// Sets the optional SPOT `tradeQuoteCcy` override for subsequent order placement.

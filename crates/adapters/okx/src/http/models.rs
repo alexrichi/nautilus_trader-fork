@@ -1622,6 +1622,44 @@ pub struct OKXFeeGroup {
     pub elp_maker: Option<Decimal>,
 }
 
+/// Leverage entry from `GET /api/v5/account/leverage-info` and
+/// `POST /api/v5/account/set-leverage`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OKXLeverageInfo {
+    /// Instrument ID.
+    #[serde(default)]
+    pub inst_id: String,
+    /// Leverage.
+    #[serde(default)]
+    pub lever: String,
+    /// Margin mode: cross | isolated.
+    #[serde(default)]
+    pub mgn_mode: String,
+    /// Position side (long/short); only for isolated long/short position mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pos_side: Option<String>,
+}
+
+/// Request body entry for `POST /api/v5/account/set-leverage`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OKXSetLeverageRequest {
+    /// Instrument ID (required for isolated margin on FUTURES/SWAP).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inst_id: Option<String>,
+    /// Currency (for MARGIN instruments).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ccy: Option<String>,
+    /// Leverage.
+    pub lever: String,
+    /// Margin mode: cross | isolated.
+    pub mgn_mode: String,
+    /// Position side (long/short); only for isolated long/short position mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pos_side: Option<String>,
+}
+
 /// Represents a fee rate entry from `GET /api/v5/account/trade-fee`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
