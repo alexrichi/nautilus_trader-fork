@@ -1098,6 +1098,7 @@ impl Logger {
             match event {
                 LogEvent::Log(line) => {
                     let mut wrapper = LogLineWrapper::new(line, trader_id_cache);
+                    super::invoke_log_line_callback(&wrapper.line);
 
                     if stderr_writer.enabled(&wrapper.line) {
                         if is_colored {

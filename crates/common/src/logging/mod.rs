@@ -150,6 +150,29 @@ pub fn logging_set_bypass() {
     LOGGING_BYPASSED.store(true, Ordering::Relaxed);
 }
 
+/// Callback invoked for every emitted log line (in the logger writer thread).
+pub type LogLineCallback = Box<dyn Fn(&logger::LogLine) + Send + Sync>;
+
+static LOG_LINE_CALLBACK: OnceLock<LogLineCallback> = OnceLock::new();
+
+/// Registers a callback that receives every log line emitted by the logger.
+///
+/// Useful for forwarding logs to external sinks (e.g. a dashboard buffer).
+/// Returns the previous callback if one is already registered.
+///
+/// # Errors
+///
+/// Returns the callback back if one is already registered.
+pub fn set_log_line_callback(callback: LogLineCallback) -> Result<(), LogLineCallback> {
+    LOG_LINE_CALLBACK.set(callback)
+}
+
+pub(crate) fn invoke_log_line_callback(line: &logger::LogLine) {
+    if let Some(callback) = LOG_LINE_CALLBACK.get() {
+        callback(line);
+    }
+}
+
 /// Shuts down the logging subsystem.
 pub fn logging_shutdown() {
     // Perform a graceful shutdown: prevent new logs, signal Close, drain, and join.
