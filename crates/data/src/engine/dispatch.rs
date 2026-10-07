@@ -408,7 +408,9 @@ impl DataEngine {
     }
 
     pub(super) fn handle_bars(&self, bars: &[Bar]) {
-        if let Err(e) = self.cache.as_ref().borrow_mut().add_bars(bars) {
+        // Response bars are historical: keep bars older than the front at their
+        // ordered position instead of the live `add_bars` rule that skips them.
+        if let Err(e) = self.cache.as_ref().borrow_mut().add_bars_historical(bars) {
             log_error_on_cache_insert(&e);
         }
     }

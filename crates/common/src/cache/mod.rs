@@ -2491,6 +2491,18 @@ impl Cache {
         Ok(())
     }
 
+    /// Adds the historical `bars` to the cache, each following [`Cache::add_bar_historical`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if persisting the bars to the backing database fails.
+    pub fn add_bars_historical(&mut self, bars: &[Bar]) -> anyhow::Result<()> {
+        for bar in bars {
+            self.add_bar_historical(*bar)?;
+        }
+        Ok(())
+    }
+
     /// Adds the `greeks` data to the cache.
     ///
     /// # Errors
