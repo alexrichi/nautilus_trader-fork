@@ -604,8 +604,14 @@ impl OKXExecutionClient {
         let activation_price = order.activation_price();
 
         let close_fraction = get_param_as_string(cmd.params.as_ref(), "close_fraction");
+        // Explicit stop-loss form: `sl_ord_px` (the OKX `slOrdPx` field, snake-cased like
+        // `close_fraction`) selects the sized stop-loss — `sz` + `slTriggerPx`/`slOrdPx` —
+        // instead of the generic trigger form (`triggerPx`/`orderPx`).
+        let sl_ord_px = get_param_as_string(cmd.params.as_ref(), "sl_ord_px");
 
-        let reduce_only = if close_fraction.is_some() {
+        // Both the close-fraction and the stop-loss form are position-closing: OKX accepts
+        // `reduceOnly` on them (the generic trigger form rejects it with 51205).
+        let reduce_only = if close_fraction.is_some() || sl_ord_px.is_some() {
             Some(true)
         } else {
             Some(is_reduce_only)
@@ -664,6 +670,7 @@ impl OKXExecutionClient {
                     price,
                     reduce_only,
                     close_fraction,
+                    sl_ord_px,
                     callback_ratio,
                     callback_spread,
                     activation_price,

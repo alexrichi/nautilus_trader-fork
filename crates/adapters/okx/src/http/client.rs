@@ -6633,6 +6633,9 @@ impl OKXHttpClient {
         limit_price: Option<Price>,
         reduce_only: Option<bool>,
         close_fraction: Option<String>,
+        // Explicit `slOrdPx` (the post-trigger price, `-1` = market): sends the sized stop-loss
+        // form — `sz` + `slTriggerPx`/`slOrdPx` — instead of the generic trigger form.
+        sl_ord_px: Option<String>,
         callback_ratio: Option<String>,
         callback_spread: Option<String>,
         activation_price: Option<Price>,
@@ -6730,6 +6733,42 @@ impl OKXHttpClient {
                 tp_trigger_px,
                 tp_ord_px,
                 tp_trigger_px_type,
+                Some(OKXPositionSide::Net),
+                Some(true),
+            )
+        } else if let Some(sl_ord_px) = sl_ord_px {
+            // Sized stop-loss: a position-closing conditional order *with* a size, so the venue
+            // reports carry one (the close-fraction form has no size until it triggers).
+            if !matches!(order_type, OrderType::StopMarket | OrderType::StopLimit) {
+                return Err(OKXHttpError::ValidationError(format!(
+                    "OKX stop-loss form is only supported for stop orders, received {order_type:?}"
+                )));
+            }
+
+            let trigger_px = trigger_price.map(|p| p.to_string()).ok_or_else(|| {
+                OKXHttpError::ValidationError(
+                    "OKX stop-loss orders require trigger_price".to_string(),
+                )
+            })?;
+            // Market execution when triggered, unless the post-trigger price is given.
+            let sl_ord_px = if sl_ord_px.is_empty() {
+                "-1".to_string()
+            } else {
+                sl_ord_px
+            };
+
+            (
+                OKXAlgoOrderType::Conditional,
+                Some(quantity.to_string()),
+                None,
+                None,
+                None,
+                Some(trigger_px),
+                Some(sl_ord_px),
+                Some(trigger_px_type_enum),
+                None,
+                None,
+                None,
                 Some(OKXPositionSide::Net),
                 Some(true),
             )
