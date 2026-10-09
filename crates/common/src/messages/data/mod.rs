@@ -770,20 +770,21 @@ impl DataResponse {
         }
     }
 
-    /// Trims vector payloads to the inclusive `[start, end]` window on `ts_init`.
+    /// Trims vector payloads to the inclusive `[start, end]` window.
     ///
-    /// Applies to variants whose payload elements implement `HasTsInit`
-    /// (`BookDeltas`, `BookDepth`, `Quotes`, `Trades`, `FundingRates`,
-    /// `Bars`, `Instruments`). Other variants are untouched: singular payloads
-    /// (`Instrument`, `Book`),
-    /// `OptionChainReferencePrice` (singular), and the opaque custom
-    /// `Data` variant.
+    /// `Bars` are trimmed on the bar time (`ts_event`): a historical fetch creates the
+    /// bars now, so their `ts_init` lies outside a past window and trimming on it would
+    /// wipe the whole response. The rest are trimmed on `ts_init` — variants whose payload
+    /// elements implement `HasTsInit` (`BookDeltas`, `BookDepth`, `Quotes`, `Trades`,
+    /// `FundingRates`, `Instruments`). Other variants are untouched: singular payloads
+    /// (`Instrument`, `Book`), `OptionChainReferencePrice` (singular), and the opaque
+    /// custom `Data` variant.
     pub fn trim_to_bounds(&mut self) {
         match self {
             Self::Quotes(r) => response::trim_data_to_bounds(&mut r.data, r.start, r.end),
             Self::Trades(r) => response::trim_data_to_bounds(&mut r.data, r.start, r.end),
             Self::FundingRates(r) => response::trim_data_to_bounds(&mut r.data, r.start, r.end),
-            Self::Bars(r) => response::trim_data_to_bounds(&mut r.data, r.start, r.end),
+            Self::Bars(r) => response::trim_bars_to_bounds(&mut r.data, r.start, r.end),
             Self::Instruments(r) => response::trim_data_to_bounds(&mut r.data, r.start, r.end),
             Self::BookDeltas(r) => response::trim_data_to_bounds(&mut r.data, r.start, r.end),
             Self::BookDepth(r) => response::trim_data_to_bounds(&mut r.data, r.start, r.end),

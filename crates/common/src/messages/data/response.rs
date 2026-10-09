@@ -81,6 +81,57 @@ pub(crate) fn trim_data_to_bounds<T: HasTsInit>(
     }
 }
 
+/// Trims bars to the inclusive `[start, end]` window on the **bar time** (`ts_event`).
+///
+/// Bars are the one payload whose `ts_init` says nothing about the request window: a
+/// historical fetch creates them at parse time, so with a window that ends before now
+/// every bar looks "after the window" and the response is cleared (the engine then drops
+/// it as empty — `Received empty Bar response`). The window bounds are bar times, so
+/// compare bar times.
+pub(crate) fn trim_bars_to_bounds(
+    data: &mut Vec<Bar>,
+    start: Option<UnixNanos>,
+    end: Option<UnixNanos>,
+) {
+    let data_len = data.len();
+    if data_len == 0 {
+        return;
+    }
+
+    let first_index = if let Some(start) = start {
+        let Some(i) = data
+            .iter()
+            .position(|item| item.ts_event.as_u64() >= start.as_u64())
+        else {
+            data.clear();
+            return;
+        };
+        i
+    } else {
+        0
+    };
+
+    let last_index = if let Some(end) = end {
+        let Some(i) = data
+            .iter()
+            .rposition(|item| item.ts_event.as_u64() <= end.as_u64())
+        else {
+            data.clear();
+            return;
+        };
+        i
+    } else {
+        data_len - 1
+    };
+
+    if first_index <= last_index {
+        data.drain(..first_index);
+        data.truncate(last_index - first_index + 1);
+    } else {
+        data.clear();
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct CustomDataResponse {
     pub correlation_id: UUID4,
@@ -542,5 +593,52 @@ impl BarsResponse {
             end,
             params,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use nautilus_model::types::Quantity;
+
+    use super::*;
+
+    /// A bar whose `ts_init` is "now" (parsed at fetch time), like a historical fetch.
+    fn bar(ts_event_ms: u64) -> Bar {
+        Bar::new(
+            BarType::from("BTC-USDT-SWAP.OKX-15-MINUTE-LAST-EXTERNAL"),
+            Price::from("100.0"),
+            Price::from("101.0"),
+            Price::from("99.0"),
+            Price::from("100.5"),
+            Quantity::from("1"),
+            UnixNanos::from(ts_event_ms * 1_000_000),
+            UnixNanos::from(1_760_000_000_000_000_000),
+        )
+    }
+
+    #[test]
+    fn test_trim_bars_keeps_a_past_window_by_event_time() {
+        let mut bars = vec![bar(1_000_000), bar(1_060_000), bar(1_120_000)];
+        trim_bars_to_bounds(
+            &mut bars,
+            Some(UnixNanos::from(1_060_000 * 1_000_000)),
+            Some(UnixNanos::from(1_120_000 * 1_000_000)),
+        );
+        let kept: Vec<u64> = bars
+            .iter()
+            .map(|b| b.ts_event.as_u64() / 1_000_000)
+            .collect();
+        assert_eq!(kept, vec![1_060_000, 1_120_000]);
+    }
+
+    #[test]
+    fn test_trim_bars_clears_when_the_window_misses_them() {
+        let mut bars = vec![bar(1_000_000)];
+        trim_bars_to_bounds(
+            &mut bars,
+            Some(UnixNanos::from(2_000_000 * 1_000_000)),
+            Some(UnixNanos::from(3_000_000 * 1_000_000)),
+        );
+        assert!(bars.is_empty());
     }
 }
