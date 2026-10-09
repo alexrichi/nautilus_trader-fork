@@ -4007,6 +4007,12 @@ impl OKXHttpClient {
 
                 // If still empty: for Range after first page, try a single backstep window using BEFORE
                 if raw.is_empty() && matches!(mode, Mode::Range) && pages > 0 {
+                    // Paging backwards inside the window: an empty page means the window is
+                    // exhausted — stop instead of fetching recent bars out of range.
+                    if forward_prepend_mode || req_used_before {
+                        break;
+                    }
+
                     let backstep_ms = (page_cap as i64).saturating_mul(slot_ms.max(1));
                     let pivot_back = after_ms.unwrap_or(now_ms).saturating_sub(backstep_ms);
 
@@ -4214,10 +4220,12 @@ impl OKXHttpClient {
                     Mode::Range => {
                         if forward_prepend_mode || req_used_before {
                             if let Some(oldest) = page_oldest_ms {
-                                // Move back by at least one bar period to avoid getting the same data
-                                let jump_back = slot_ms.max(60_000); // At least 1 minute
-                                before_ms = Some(oldest.saturating_sub(jump_back));
-                                after_ms = None;
+                                // Page inside the window: move the upper bound (`after` =
+                                // "records older than"), keep the lower one (`before` = the
+                                // window start). Moving `before` and dropping `after`
+                                // instead asked OKX for the newest records: the window was
+                                // never filled and the loop spun until the caller's deadline.
+                                after_ms = Some(oldest);
                             } else {
                                 break;
                             }
