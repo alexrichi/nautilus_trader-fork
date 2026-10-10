@@ -1214,6 +1214,9 @@ impl OKXHttpClient {
                     reduce_only,
                     None,
                     close_fraction,
+                    // The sized stop-loss form (`slOrdPx`) is a fork-internal option:
+                    // the Python binding does not expose it.
+                    None,
                     callback_ratio,
                     callback_spread,
                     activation_price,
