@@ -96,8 +96,8 @@ use crate::{
     websocket::{
         client::OKXWebSocketClient,
         dispatch::{
-            AlgoCancelContext, AlgoOrderState, WsDispatchState, dispatch_ws_message,
-            emit_algo_cancel_rejections, format_order_response_reason,
+AlgoCancelContext, AlgoOrderState, PendingAmendUpdate, WsDispatchState,
+            dispatch_ws_message, emit_algo_cancel_rejections, format_order_response_reason,
         },
         messages::OKXWsMessage,
         parse::{FeeCache, FilledQtyCache, OrderStateSnapshot},
@@ -2218,6 +2218,49 @@ impl ExecutionClient for OKXExecutionClient {
         );
         let ws_private = self.ws_private.clone();
 
+        // The amend push for an order with no WS snapshot cannot be classified as an update (the
+        // venue may even push it without a clOrdId, as a report), so the engine would settle it
+        // only with the slow inflight check (~6 s). Stash the update and release it once the
+        // venue confirms the amend; a rejected amend never moves the order locally, and a tracked
+        // order keeps the native push update.
+        let cached_order = self
+            .core
+            .cache()
+            .order(&command.client_order_id)
+            .map(|order| order.cloned());
+        let venue_order_id = match (command.venue_order_id, cached_order.as_ref()) {
+            (Some(venue_order_id), _) => Some(venue_order_id),
+            (None, Some(order)) => order.venue_order_id(),
+            (None, None) => None,
+        };
+        let emit_update = !self
+            .ws_dispatch_state
+            .has_order_snapshot(&command.client_order_id);
+        let stub_key = if emit_update
+            && let (Some(order), Some(venue_order_id)) = (cached_order, venue_order_id)
+        {
+            let quantity = command.quantity.unwrap_or_else(|| order.quantity());
+            let price = command.price.or_else(|| order.price());
+            let trigger_price = command.trigger_price.or_else(|| order.trigger_price());
+            let key = venue_order_id.to_string();
+            self.ws_dispatch_state.pending_amend_updates.insert(
+                key.clone(),
+                PendingAmendUpdate::new(
+                    command.client_order_id,
+                    order,
+                    venue_order_id,
+                    quantity,
+                    price,
+                    trigger_price,
+                    self.clock.get_time_ns(),
+                ),
+            );
+            Some(key)
+        } else {
+            None
+        };
+        let dispatch_state = Arc::clone(&self.ws_dispatch_state);
+
         let new_px_usd = get_param_as_string(command.params.as_ref(), "px_usd");
         let new_px_vol = get_param_as_string(command.params.as_ref(), "px_vol");
         let rpi_taker_access = get_param_as_bool(command.params.as_ref(), "rpi_taker_access");
@@ -2244,6 +2287,10 @@ impl ExecutionClient for OKXExecutionClient {
                 .await;
 
             if let Err(e) = result {
+                // The amend never reached the venue: no confirmation will follow.
+                if let Some(key) = stub_key.as_ref() {
+                    dispatch_state.pending_amend_updates.remove(key);
+                }
                 emit_modify_failure(
                     classify_okx_ws_failure(&e),
                     &emitter,

@@ -53,7 +53,7 @@ use ustr::Ustr;
 use crate::{
     common::{
         consts::{
-            OKX_FIELD_CLORDID, OKX_FIELD_SCODE, OKX_FIELD_SMSG, OKX_FIELD_SUBCODE,
+            OKX_FIELD_CLORDID, OKX_FIELD_ORDID, OKX_FIELD_SCODE, OKX_FIELD_SMSG, OKX_FIELD_SUBCODE,
             OKX_POST_ONLY_CANCEL_REASON, OKX_POST_ONLY_CANCEL_SOURCE, OKX_SUCCESS_CODE,
         },
         enums::{OKXAlgoOrderStatus, OKXAlgoOrderType, OKXOrderStatus, OKXOrderType},
@@ -172,6 +172,57 @@ where
     }
 }
 
+/// A ready amend update for an order whose venue push cannot be classified as an update.
+///
+/// Stashed when the amend is sent (see `OKXExecutionClient::modify_order`) and released only
+/// when the venue confirms the amend in its response, so a rejected amend never moves the
+/// order locally.
+#[derive(Debug)]
+pub(crate) struct PendingAmendUpdate {
+    client_order_id: ClientOrderId,
+    order: nautilus_model::orders::OrderAny,
+    venue_order_id: VenueOrderId,
+    quantity: nautilus_model::types::Quantity,
+    price: Option<nautilus_model::types::Price>,
+    trigger_price: Option<nautilus_model::types::Price>,
+    ts_event: UnixNanos,
+}
+
+impl PendingAmendUpdate {
+    pub(crate) fn new(
+        client_order_id: ClientOrderId,
+        order: nautilus_model::orders::OrderAny,
+        venue_order_id: VenueOrderId,
+        quantity: nautilus_model::types::Quantity,
+        price: Option<nautilus_model::types::Price>,
+        trigger_price: Option<nautilus_model::types::Price>,
+        ts_event: UnixNanos,
+    ) -> Self {
+        Self {
+            client_order_id,
+            order,
+            venue_order_id,
+            quantity,
+            price,
+            trigger_price,
+            ts_event,
+        }
+    }
+
+    fn emit(&self, emitter: &ExecutionEventEmitter, state: &WsDispatchState) {
+        emitter.emit_order_updated(
+            &self.order,
+            self.venue_order_id,
+            self.quantity,
+            self.price,
+            self.trigger_price,
+            None,
+            self.ts_event,
+        );
+        state.insert_accepted(self.client_order_id, self.venue_order_id);
+    }
+}
+
 /// Shared state for cross-stream event deduplication between the private
 /// and business WebSocket dispatch loops.
 #[derive(Debug)]
@@ -188,6 +239,8 @@ pub struct WsDispatchState {
     terminal_orders: DedupCache<ClientOrderId>,
     emitted_trades: DedupCache<TradeId>,
     post_only_rejections: DedupCache<Ustr>,
+    seen_order_snapshots: DedupCache<ClientOrderId>,
+    pub(crate) pending_amend_updates: DashMap<String, PendingAmendUpdate>,
     lifecycle_bindings: Mutex<OrderLifecycleBindings>,
     pending_linked_children: Mutex<VecDeque<PendingLinkedChild>>,
     linked_child_notify: tokio::sync::Notify,
@@ -214,6 +267,8 @@ impl Default for WsDispatchState {
             terminal_orders: DedupCache::new(),
             emitted_trades: DedupCache::new(),
             post_only_rejections: DedupCache::new(),
+            seen_order_snapshots: DedupCache::new(),
+            pending_amend_updates: DashMap::new(),
             lifecycle_bindings: Mutex::new(OrderLifecycleBindings::default()),
             pending_linked_children: Mutex::new(VecDeque::new()),
             linked_child_notify: tokio::sync::Notify::new(),
@@ -420,6 +475,19 @@ impl WsDispatchState {
         self.accepted_venue_order_ids
             .lock()
             .insert(cid, venue_order_id);
+    }
+
+    /// Records that an order snapshot now exists for the order: the previous-state cache used
+    /// to classify amend pushes as updates is populated.
+    pub fn mark_order_snapshot(&self, cid: ClientOrderId) {
+        self.seen_order_snapshots.insert(cid);
+    }
+
+    /// Returns whether an order message has been processed for the order before, so the
+    /// previous-state cache exists and an amend push can be classified as an update.
+    #[must_use]
+    pub fn has_order_snapshot(&self, cid: &ClientOrderId) -> bool {
+        self.seen_order_snapshots.contains(cid)
     }
 
     fn accepted_venue_order_id(&self, cid: &ClientOrderId) -> Option<VenueOrderId> {
@@ -636,6 +704,10 @@ pub fn dispatch_ws_message(
                     .get(OKX_FIELD_CLORDID)
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
+                let ord_id = item
+                    .get(OKX_FIELD_ORDID)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
 
                 if s_code == OKX_SUCCESS_CODE {
                     log::debug!("Order response ok: op={op:?} cl_ord_id={cl_ord_id}");
@@ -653,11 +725,24 @@ pub fn dispatch_ws_message(
                         }
                         OKXWsOperation::AmendOrder | OKXWsOperation::BatchAmendOrders => {
                             state.pending_amends.remove(cl_ord_id);
+                            // The ack echoes the order's own clOrdId (empty for an order placed
+                            // without one), so look the stashed update up by venue order ID too.
+                            if let Some((_, update)) = state
+                                .pending_amend_updates
+                                .remove(ord_id)
+                                .or_else(|| state.pending_amend_updates.remove(cl_ord_id))
+                            {
+                                update.emit(emitter, state);
+                            }
                         }
                         _ => {}
                     }
                     continue;
                 }
+
+                // A rejected amend never moves the order locally: drop the stashed update.
+                state.pending_amend_updates.remove(cl_ord_id);
+                state.pending_amend_updates.remove(ord_id);
 
                 let Some(client_order_id) = parse_client_order_id(cl_ord_id) else {
                     log::warn!(
@@ -1638,6 +1723,7 @@ fn dispatch_order_messages(
                     let needs_status =
                         matches!(event, ParsedOrderEvent::Fill(_) | ParsedOrderEvent::Skipped);
                     update_order_state_cache(msg, instrument, client_order_id, order_state_cache);
+                    state.mark_order_snapshot(client_order_id);
                     dispatch_parsed_order_event(
                         event,
                         client_order_id,

@@ -83,6 +83,9 @@ pub const OKX_FIELD_SUBCODE: &str = "subCode";
 /// JSON field key for client order ID in order operation responses.
 pub const OKX_FIELD_CLORDID: &str = "clOrdId";
 
+/// JSON field key for venue order ID in order operation responses.
+pub const OKX_FIELD_ORDID: &str = "ordId";
+
 /// Maximum length of a `clOrdId` accepted by OKX.
 ///
 /// OKX requires `clOrdId` to be 1-32 case-sensitive alphanumeric characters.
