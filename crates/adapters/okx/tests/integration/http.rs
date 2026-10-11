@@ -5776,6 +5776,7 @@ async fn test_http_place_algo_order_with_close_fraction_uses_conditional_close_o
             None,
             None,
             None,
+            None,
         )
         .await
         .unwrap();
