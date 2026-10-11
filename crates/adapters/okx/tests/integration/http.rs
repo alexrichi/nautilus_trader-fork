@@ -5002,6 +5002,7 @@ async fn test_http_place_algo_order_with_close_fraction_uses_conditional_close_o
             None,
             None,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -7979,6 +7980,7 @@ async fn test_http_place_algo_order_returns_error_on_nonzero_scode() {
             Quantity::from("0.01"),
             Some(Price::from("50000")),
             Some(TriggerType::Default),
+            None,
             None,
             None,
             None,

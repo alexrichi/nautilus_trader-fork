@@ -103,7 +103,9 @@ use crate::{
         enums::OKXWsChannel,
         error::OKXWsError,
         handler::SnapshotGate,
-        messages::{NautilusWsMessage, OKXBookMsg, OKXOptionSummaryMsg, OKXTickerMsg, OKXWsMessage},
+        messages::{
+            NautilusWsMessage, OKXBookMsg, OKXOptionSummaryMsg, OKXTickerMsg, OKXWsMessage,
+        },
         parse::{
             extract_fees_from_cached_instrument, parse_book_depth_msg, parse_book_msg_vec,
             parse_index_price_msg_vec, parse_option_summary_greeks, parse_rpi_book_msg_vec,
@@ -1884,11 +1886,7 @@ fn okx_ticker_data_type(instrument_id: InstrumentId) -> DataType {
         "instrument_id".to_string(),
         serde_json::Value::String(instrument_id.to_string()),
     );
-    DataType::new(
-        "OKXTicker",
-        Some(metadata),
-        Some(instrument_id.to_string()),
-    )
+    DataType::new("OKXTicker", Some(metadata), Some(instrument_id.to_string()))
 }
 
 fn configured_instrument_types(config: &OKXDataClientConfig) -> Vec<OKXInstrumentType> {

@@ -60,7 +60,7 @@ use nautilus_model::{
         AccountId, ClientId, ClientOrderId, InstrumentId, StrategyId, Venue, VenueOrderId,
     },
     instruments::InstrumentAny,
-    orders::Order,
+    orders::{Order, OrderAny},
     reports::{ExecutionMassStatus, FillReport, OrderStatusReport, PositionStatusReport},
     types::{AccountBalance, MarginBalance, Quantity},
 };
@@ -92,11 +92,12 @@ use crate::{
             ReportInstrumentScope,
         },
         models::{OKXAmendAlgoOrderRequest, OKXCancelAlgoOrderRequest},
+        query::GetAlgoOrderParams,
     },
     websocket::{
         client::OKXWebSocketClient,
         dispatch::{
-AlgoCancelContext, AlgoOrderState, PendingAmendUpdate, WsDispatchState,
+            AlgoCancelContext, AlgoOrderState, PendingAmendUpdate, WsDispatchState,
             dispatch_ws_message, emit_algo_cancel_rejections, format_order_response_reason,
         },
         messages::OKXWsMessage,
@@ -639,7 +640,9 @@ impl OKXExecutionClient {
             (None, None)
         };
 
-        let algo_order_type = if close_fraction.is_some() {
+        // The sized stop-loss is submitted in the TP/SL (`conditional`) form, so an amendment of
+        // it must use `newSlTriggerPx` — the generic mapping below would pick the trigger form.
+        let algo_order_type = if close_fraction.is_some() || sl_ord_px.is_some() {
             OKXAlgoOrderType::Conditional
         } else {
             conditional_order_to_algo_type(order_type)?
@@ -706,13 +709,104 @@ impl OKXExecutionClient {
     }
 
     fn modify_algo_order(&self, cmd: &ModifyOrder) {
-        let algo_type = self
+        let tracked_algo_type = self
             .ws_dispatch_state
             .algo_order_states
             .get(&cmd.client_order_id)
             .map(|state| state.order_type);
-        let context = self.ws_dispatch_state.order_context(cmd.client_order_id);
+        let tracked_context = self.ws_dispatch_state.order_context(cmd.client_order_id);
 
+        if let (Some(algo_type), Some(context)) = (tracked_algo_type, tracked_context) {
+            self.amend_algo_order(cmd, Some(algo_type), Some(context));
+            return;
+        }
+
+        // The algo family and the order context live in tracking state that only a submit or a
+        // tracked push fills, so an order recovered by reconciliation (i.e. after a restart)
+        // carries neither and the amendment cannot be shaped. The venue still knows the family:
+        // read it once, restore the tracking, and the pushes take over from there.
+        let cached_order = self
+            .core
+            .cache()
+            .order(&cmd.client_order_id)
+            .map(|order| order.cloned());
+        let algo_id = cmd.venue_order_id.map(|id| id.to_string()).or_else(|| {
+            cached_order
+                .as_ref()
+                .and_then(OrderAny::venue_order_id)
+                .map(|id| id.to_string())
+        });
+
+        let http_client = self.http_client.clone();
+        let dispatch_state = Arc::clone(&self.ws_dispatch_state);
+        let command = cmd.clone();
+        let emitter = self.emitter.clone();
+        let clock = self.clock;
+        self.spawn_task("modify_algo_order", async move {
+            let context = cached_order.as_ref().map(OrderContext::from);
+            let algo_type = match algo_id {
+                Some(algo_id) => venue_algo_order_type(&http_client, &algo_id).await,
+                None => None,
+            };
+
+            let Some((algo_type, context)) = algo_type.zip(context) else {
+                emit_modify_failure(
+                    CommandFailure::NotSent(
+                        "Cannot determine OKX algo order terms for modification".to_string(),
+                    ),
+                    &emitter,
+                    clock,
+                    command.strategy_id,
+                    command.instrument_id,
+                    command.client_order_id,
+                    command.venue_order_id,
+                );
+                return Ok(());
+            };
+
+            dispatch_state.track_order_context(context);
+            dispatch_state.algo_order_states.insert(
+                command.client_order_id,
+                AlgoOrderState {
+                    order_type: algo_type,
+                    ts_last: clock.get_time_ns(),
+                },
+            );
+            // The venue confirms the amendment with an algo push that carries no client order id,
+            // so the parent binding is what routes it back to this order - without it the push is
+            // dropped as external and the engine only learns the new terms from a slow query.
+            if let Some(algo_id) = command.venue_order_id {
+                dispatch_state.bind_algo_parent(command.client_order_id, algo_id);
+            }
+
+            let request = match algo_amend_request(&command, Some(algo_type), Some(context)) {
+                Ok(request) => request,
+                Err(reason) => {
+                    emit_modify_failure(
+                        CommandFailure::NotSent(reason.to_string()),
+                        &emitter,
+                        clock,
+                        command.strategy_id,
+                        command.instrument_id,
+                        command.client_order_id,
+                        command.venue_order_id,
+                    );
+                    return Ok(());
+                }
+            };
+
+            send_algo_amend(&http_client, &emitter, clock, &command, request).await;
+            Ok(())
+        });
+    }
+
+    /// Builds the `amend-algos` request and sends it, rejecting locally-known problems in place.
+    fn amend_algo_order(
+        &self,
+        cmd: &ModifyOrder,
+        algo_type: Option<OKXAlgoOrderType>,
+        context: Option<OrderContext>,
+    ) {
         let request = match algo_amend_request(cmd, algo_type, context) {
             Ok(request) => request,
             Err(reason) => {
@@ -734,38 +828,7 @@ impl OKXExecutionClient {
         let emitter = self.emitter.clone();
         let clock = self.clock;
         self.spawn_task("modify_algo_order", async move {
-            let result = http_client.amend_algo_order(request).await;
-
-            let failure = match result {
-                Err(e) => Some(classify_okx_http_failure(&e)),
-                Ok(response) => response
-                    .s_code
-                    .as_deref()
-                    .filter(|code| *code != OKX_SUCCESS_CODE)
-                    .map(|code| {
-                        classify_okx_venue_code(
-                            code,
-                            format_order_response_reason(
-                                code,
-                                response.s_msg.as_deref().unwrap_or(""),
-                                "",
-                            ),
-                        )
-                    }),
-            };
-
-            if let Some(failure) = failure {
-                emit_modify_failure(
-                    failure,
-                    &emitter,
-                    clock,
-                    command.strategy_id,
-                    command.instrument_id,
-                    command.client_order_id,
-                    command.venue_order_id,
-                );
-            }
-
+            send_algo_amend(&http_client, &emitter, clock, &command, request).await;
             Ok(())
         });
     }
@@ -3425,6 +3488,61 @@ fn emit_modify_failure(
     }
 }
 
+/// Sends a built `amend-algos` request and reports the outcome.
+async fn send_algo_amend(
+    http_client: &OKXHttpClient,
+    emitter: &ExecutionEventEmitter,
+    clock: &'static AtomicTime,
+    command: &ModifyOrder,
+    request: OKXAmendAlgoOrderRequest,
+) {
+    let failure = match http_client.amend_algo_order(request).await {
+        Err(e) => Some(classify_okx_http_failure(&e)),
+        Ok(response) => response
+            .s_code
+            .as_deref()
+            .filter(|code| *code != OKX_SUCCESS_CODE)
+            .map(|code| {
+                classify_okx_venue_code(
+                    code,
+                    format_order_response_reason(code, response.s_msg.as_deref().unwrap_or(""), ""),
+                )
+            }),
+    };
+
+    if let Some(failure) = failure {
+        emit_modify_failure(
+            failure,
+            emitter,
+            clock,
+            command.strategy_id,
+            command.instrument_id,
+            command.client_order_id,
+            command.venue_order_id,
+        );
+    }
+}
+
+/// Reads the algo order family (`trigger` vs `conditional`) from the venue.
+///
+/// The in-memory tracking that normally carries it is rebuilt from submits and pushes, so an
+/// order recovered by reconciliation has none - the venue is the only source left.
+async fn venue_algo_order_type(
+    http_client: &OKXHttpClient,
+    algo_id: &str,
+) -> Option<OKXAlgoOrderType> {
+    let orders = http_client
+        .raw_client()
+        .get_algo_order(GetAlgoOrderParams {
+            algo_id: Some(algo_id.to_string()),
+            algo_cl_ord_id: None,
+        })
+        .await
+        .ok()?;
+
+    orders.first().map(|order| order.ord_type)
+}
+
 fn algo_amend_request(
     cmd: &ModifyOrder,
     algo_type: Option<OKXAlgoOrderType>,
@@ -4536,6 +4654,142 @@ mod tests {
         server.abort();
     }
 
+    #[tokio::test]
+    async fn test_modify_algo_order_resolves_terms_from_venue_when_untracked() {
+        let (client, cache) = build_test_exec_client_with_cache();
+        let (request_tx, mut request_rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let router = Router::new()
+            .route(
+                "/api/v5/trade/order-algo",
+                get(|| async {
+                    Json(serde_json::json!({"code": "0", "msg": "", "data": [{
+                        "algoId": "7003",
+                        "algoClOrdId": "OUNTRACKED",
+                        "instId": "BTC-USDT-SWAP",
+                        "instType": "SWAP",
+                        "ordType": "conditional",
+                        "state": "live",
+                        "side": "sell",
+                        "posSide": "net",
+                        "sz": "0.03",
+                        "slTriggerPx": "55000",
+                        "slOrdPx": "-1",
+                        "slTriggerPxType": "mark",
+                        "tdMode": "cross",
+                        "cTime": "1700000000000",
+                        "uTime": "1700000000000"
+                    }]}))
+                }),
+            )
+            .route(
+                "/api/v5/trade/amend-algos",
+                post(move |Json(request): Json<Value>| {
+                    let tx = request_tx.clone();
+                    async move {
+                        tx.send(request).unwrap();
+                        Json(serde_json::json!({"code": "0", "msg": "", "data": [{
+                            "algoId": "7003", "sCode": "0", "sMsg": ""
+                        }]}))
+                    }
+                }),
+            );
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+
+        let mut client = client;
+        let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel();
+        client.emitter.set_sender(event_tx);
+        client.http_client = OKXHttpClient::with_credentials(
+            Some("test_key".into()),
+            Some("test_secret".into()),
+            Some("test_pass".into()),
+            Some(base_url),
+            5,
+            0,
+            1,
+            1,
+            crate::common::enums::OKXEnvironment::Live,
+            None,
+        )
+        .unwrap();
+
+        let client_order_id = ClientOrderId::from("OUNTRACKED");
+        let instrument_id = InstrumentId::from("BTC-USDT-SWAP.OKX");
+        let order = OrderTestBuilder::new(OrderType::StopMarket)
+            .instrument_id(instrument_id)
+            .client_order_id(client_order_id)
+            .side(OrderSide::Sell)
+            .quantity(Quantity::from("0.03"))
+            .trigger_price(Price::from("55000.0"))
+            .trigger_type(TriggerType::MarkPrice)
+            .build();
+        // Only the cache knows the order: no submit, so no tracking state (post-restart shape).
+        cache
+            .borrow_mut()
+            .add_order(order.clone(), None, Some(*OKX_CLIENT_ID), false)
+            .unwrap();
+
+        client
+            .modify_order(ModifyOrder::new(
+                TraderId::from("TESTER-001"),
+                Some(*OKX_CLIENT_ID),
+                order.strategy_id(),
+                instrument_id,
+                client_order_id,
+                Some(VenueOrderId::from("7003")),
+                None,
+                None,
+                Some(Price::from("54000.0")),
+                UUID4::new(),
+                UnixNanos::default(),
+                None,
+                None,
+            ))
+            .unwrap();
+
+        let request = tokio::time::timeout(Duration::from_secs(5), request_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            request,
+            serde_json::json!({
+                "instId": "BTC-USDT-SWAP",
+                "algoId": "7003",
+                "newSlTriggerPx": "54000.0",
+                "newSlTriggerPxType": "mark",
+            })
+        );
+        // The recovered terms and the parent binding are kept: the venue confirms the amendment
+        // with an algo push that carries no client order id, and this is what routes it back.
+        assert_eq!(
+            client
+                .ws_dispatch_state
+                .algo_order_states
+                .get(&client_order_id)
+                .unwrap()
+                .order_type,
+            OKXAlgoOrderType::Conditional
+        );
+        assert!(
+            client
+                .ws_dispatch_state
+                .order_context(client_order_id)
+                .is_some()
+        );
+        assert_eq!(
+            client
+                .ws_dispatch_state
+                .order_venue_binding(client_order_id)
+                .map(|(parent, _)| parent),
+            Some(VenueOrderId::from("7003"))
+        );
+        server.abort();
+    }
+
     #[rstest]
     #[case::trigger(
         OrderType::StopLimit,
@@ -4638,7 +4892,8 @@ mod tests {
         true,
         "OKX does not support modification of this algo order type"
     )]
-    fn test_modify_algo_order_rejects_locally(
+    #[tokio::test]
+    async fn test_modify_algo_order_rejects_locally(
         #[case] algo_type: Option<OKXAlgoOrderType>,
         #[case] has_context: bool,
         #[case] has_id: bool,
@@ -4690,8 +4945,13 @@ mod tests {
             None,
         ));
 
+        // A fully tracked order rejects in place; an untracked one asks the venue for the
+        // algo terms first, so both arrive - just not necessarily in the same tick.
         let ExecutionEvent::Order(OrderEventAny::ModifyRejected(rejected)) =
-            event_rx.try_recv().unwrap()
+            tokio::time::timeout(Duration::from_secs(5), event_rx.recv())
+                .await
+                .unwrap()
+                .unwrap()
         else {
             panic!("expected OrderModifyRejected");
         };
