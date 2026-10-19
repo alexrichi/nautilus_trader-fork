@@ -9100,6 +9100,7 @@ async fn test_http_place_algo_order_returns_error_on_nonzero_scode() {
             None,
             None,
             None,
+            None,
         )
         .await;
 

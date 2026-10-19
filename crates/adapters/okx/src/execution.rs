@@ -885,7 +885,7 @@ impl OKXExecutionClient {
             // so the parent binding is what routes it back to this order - without it the push is
             // dropped as external and the engine only learns the new terms from a slow query.
             if let Some(algo_id) = command.venue_order_id {
-                dispatch_state.bind_algo_parent(command.client_order_id, algo_id);
+                dispatch_state.bind_order(command.client_order_id, algo_id);
             }
 
             let request = match algo_amend_request(&command, Some(algo_type), Some(context)) {
