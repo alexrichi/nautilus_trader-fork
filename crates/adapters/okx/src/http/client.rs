@@ -4320,6 +4320,9 @@ impl OKXHttpClient {
         limit: Option<u32>,
     ) -> anyhow::Result<(Vec<Bar>, OKXHistoryCoverage)> {
         const MAX_PAGES_SOFT: usize = 500;
+        /// Bars per request — the same for both endpoints: the history endpoint's documented
+        /// limit of 100 is stale, the API returns 300 (`limit=500` is clamped to 300).
+        const CANDLES_PAGE_CEILING: usize = 300;
 
         self.request_bars_paged(bar_type, start, end, limit, MAX_PAGES_SOFT)
             .await
@@ -4503,7 +4506,10 @@ impl OKXHttpClient {
             let age_hours = age_ms / (60 * 60 * 1000);
             let using_history = age_hours > 1; // Use history if data is > 1 hour old
 
-            let page_ceiling = if using_history { 100 } else { 300 };
+            // The history endpoint serves 300 bars per request too (see the constant): with
+            // the same page size as the regular one, a window costs the same number of
+            // round trips it always should have.
+            let page_ceiling = CANDLES_PAGE_CEILING;
             let remaining = limit
                 .filter(|&l| l > 0) // Treat limit=0 as no limit
                 .map_or(page_ceiling, |l| (l as usize).saturating_sub(out.len()));
