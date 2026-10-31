@@ -5440,6 +5440,7 @@ async fn test_http_place_algo_order_spot_buy_preserves_denomination(
             None,
             None,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -5491,6 +5492,7 @@ async fn test_http_place_algo_order_cash_spot_buy_requires_trigger(
             false,
             None,
             Some(TriggerType::LastPrice),
+            None,
             None,
             None,
             None,
@@ -5601,6 +5603,7 @@ async fn test_http_place_algo_order_unsupported_terms_are_not_sent(
             None,
             None,
             None,
+            None,
         )
         .await;
 
@@ -5695,6 +5698,7 @@ async fn test_http_place_algo_order_preserves_algo_routes(
             (!trailing).then(|| Price::from("51234.5")),
             Some(TriggerType::LastPrice),
             (!trailing).then(|| Price::from("50234.1")),
+            None,
             None,
             None,
             None,

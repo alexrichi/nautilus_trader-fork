@@ -684,7 +684,8 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn test_request_bars_paged_is_truncated_at_the_page_cap() {
-        // A day of minute candles, a window ten days long: two history pages of 100 cannot reach the start
+        // A day of minute candles, a window ten days long: two history pages of 300 cannot reach the start
+        // (the history endpoint serves 300 per page, see `CANDLES_PAGE_CEILING`)
         let first: Timestamp = "2026-09-01T00:00:00Z".parse().unwrap();
         let candles: Vec<serde_json::Value> = (0..1_440i64)
             .rev()
@@ -757,7 +758,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(coverage, OKXHistoryCoverage::Truncated);
-        assert_eq!(bars.len(), 200);
+        assert_eq!(bars.len(), 600);
     }
 }
 
@@ -4320,9 +4321,6 @@ impl OKXHttpClient {
         limit: Option<u32>,
     ) -> anyhow::Result<(Vec<Bar>, OKXHistoryCoverage)> {
         const MAX_PAGES_SOFT: usize = 500;
-        /// Bars per request — the same for both endpoints: the history endpoint's documented
-        /// limit of 100 is stale, the API returns 300 (`limit=500` is clamped to 300).
-        const CANDLES_PAGE_CEILING: usize = 300;
 
         self.request_bars_paged(bar_type, start, end, limit, MAX_PAGES_SOFT)
             .await
@@ -4337,6 +4335,9 @@ impl OKXHttpClient {
         max_pages: usize,
     ) -> anyhow::Result<(Vec<Bar>, OKXHistoryCoverage)> {
         const HISTORY_SPLIT_DAYS: i64 = 100;
+        /// Bars per request — the same for both endpoints: the history endpoint's documented
+        /// limit of 100 is stale, the API returns 300 (`limit=500` is clamped to 300).
+        const CANDLES_PAGE_CEILING: usize = 300;
 
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         enum Mode {
