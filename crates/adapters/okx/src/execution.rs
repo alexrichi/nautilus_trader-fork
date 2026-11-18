@@ -112,8 +112,7 @@ use crate::{
         client::OKXWebSocketClient,
         dispatch::{
 AlgoCancelContext, AlgoOrderState, PendingAmendUpdate, WsDispatchState,
-            dispatch_ws_message, emit_algo_cancel_rejections, emit_send_failed_cancel,
-            format_order_response_reason,
+            emit_algo_cancel_rejections, emit_send_failed_cancel, format_order_response_reason,
         },
         error::OKXWsError,
     },
